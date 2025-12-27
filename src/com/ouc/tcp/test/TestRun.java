@@ -4,7 +4,7 @@ import com.ouc.tcp.app.SystemStart;
 
 public class TestRun {
 	public static void main(String[] args) throws InterruptedException {
-		System.out.println("启动RDT2.0：");
+		System.out.println("启动RDT2.2：");
 		SystemStart.main(null);
 		System.out.println("测试完成。");
 	}
