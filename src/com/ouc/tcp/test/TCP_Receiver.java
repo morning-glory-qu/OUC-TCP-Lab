@@ -12,7 +12,7 @@ import java.io.IOException;
 
 public class TCP_Receiver extends TCP_Receiver_ADT {
     private TCP_PACKET ackPack;    //回复的ACK报文段
-    int sequence = 1;//用于记录当前待接收的包序号，注意包序号不完全是
+    int sequence = 1;//用于记录当前待接收的包序号，也就是期望接受的下一个数据字节的起始序号(TCP的seq只记录数据部分第一个字节在原始字节流的位置)
 
     /*构造函数*/
     public TCP_Receiver() {
@@ -26,20 +26,28 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         //检查校验码，生成ACK
         if (CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()) {
             //生成ACK报文段（设置确认号）
-            tcpH.setTh_ack(recvPack.getTcpH().getTh_seq());
+            tcpH.setTh_ack(sequence);
             ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
             tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
             //回复ACK报文段
             reply(ackPack);
 
             //将接收到的正确有序的数据插入data队列，准备交付
-            dataQueue.add(recvPack.getTcpS().getData());
-            sequence++;
+            if (recvPack.getTcpH().getTh_seq() == sequence) { // 当前接收到的数据包 如果和期望序号匹配
+                dataQueue.add(recvPack.getTcpS().getData()); // 把数据部分加入到数据队列
+                sequence += recvPack.getTcpS().getData().length; // 更新 sequence = sequence + 当前数据包长度
+                System.out.println("RDT3.0: In-order packet accepted. New sequence: " + sequence);
+            } else {
+                // RDT3.0新增：处理重复或失序包（发送ACK但不交付数据）
+                System.out.println("RDT3.0: Duplicate/out-of-order packet. Expected: " + sequence +
+                        ", Received: " + recvPack.getTcpH().getTh_seq());
+            }
         } else {
+            // 校验错误的情况 - 保持原逻辑，但ACK号设置与上面一致
             System.out.println("Receive Computed: " + CheckSum.computeChkSum(recvPack));
             System.out.println("Received Packet" + recvPack.getTcpH().getTh_sum());
             System.out.println("Problem: Packet Number: " + recvPack.getTcpH().getTh_seq() + " + InnerSeq:  " + sequence);
-            tcpH.setTh_ack(-1);
+            tcpH.setTh_ack(sequence);
             ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
             tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
             //回复ACK报文段
@@ -77,7 +85,17 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     //回复ACK报文段
     public void reply(TCP_PACKET replyPack) {
         //设置错误控制标志
-        tcpH.setTh_eflag((byte) 1);    //eFlag=0，信道无错误
+		/*
+		 	0.信道无差错
+			1.只出错
+			2.只丢包
+			3.只延迟
+			4.出错 / 丢包
+			5.出错 / 延迟
+			6.丢包 / 延迟
+			7.出错 / 丢包 / 延迟
+		 */
+        tcpH.setTh_eflag((byte) 7);    //eFlag=0，信道无错误
 
         //发送数据报
         client.send(replyPack);
