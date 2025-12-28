@@ -4,12 +4,18 @@
 package com.ouc.tcp.test;
 
 import com.ouc.tcp.client.TCP_Sender_ADT;
+import com.ouc.tcp.client.UDT_RetransTask;
+import com.ouc.tcp.message.TCP_PACKET;
+
+import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.TCP_PACKET;
 
 public class TCP_Sender extends TCP_Sender_ADT {
 
     private TCP_PACKET tcpPack;    //待发送的TCP数据报
-    private volatile int flag = 0;
+    private volatile int flag = 0; // 0：未确认，1：已确认
+    private UDT_Timer timer = null; // 定时器
+    private UDT_RetransTask reTrans = null; // 重传任务
 
     /*构造函数*/
     public TCP_Sender() {
@@ -33,18 +39,34 @@ public class TCP_Sender extends TCP_Sender_ADT {
         udt_send(tcpPack);
         flag = 0;
 
-        //等待ACK报文
-        //waitACK();
+        // 启动计时器
+        timer = new UDT_Timer();
+        reTrans = new UDT_RetransTask(client, tcpPack);
+        timer.schedule(reTrans, 3000, 3000); // 3s后开始重传，每1s重传1次
+
+        // 等待ACK或者超时
         while (flag == 0) {
             Thread.onSpinWait();
         }
+
+
     }
 
     @Override
     //不可靠发送：将打包好的TCP数据报通过不可靠传输信道发送；仅需修改错误标志
     public void udt_send(TCP_PACKET stcpPack) {
         //设置错误控制标志
-        tcpH.setTh_eflag((byte) 1);
+        /*
+		 	0.信道无差错
+			1.只出错
+			2.只丢包
+			3.只延迟
+			4.出错 / 丢包
+			5.出错 / 延迟
+			6.丢包 / 延迟
+			7.出错 / 丢包 / 延迟
+		 */
+        tcpH.setTh_eflag((byte) 7);
         //System.out.println("to send: "+stcpPack.getTcpH().getTh_seq());
         //发送数据报
         client.send(stcpPack);
@@ -55,20 +77,17 @@ public class TCP_Sender extends TCP_Sender_ADT {
     public void waitACK() {
         //循环检查ackQueue
         //循环检查确认号对列中是否有新收到的ACK
-        if (ackQueue.isEmpty()) {
-            return;
-        }
-
-        int currentAck = ackQueue.poll();
-        // System.out.println("CurrentAck: "+currentAck);
-        if (currentAck == tcpPack.getTcpH().getTh_seq()) {
-            System.out.println("Clear: " + tcpPack.getTcpH().getTh_seq());
-            flag = 1;
-            //break;
-        } else {
-            System.out.println("Retransmit: " + tcpPack.getTcpH().getTh_seq());
-            udt_send(tcpPack);
-            flag = 0;
+        if (!ackQueue.isEmpty()) {
+            int currentAck = ackQueue.poll();
+            // 正确 ACK = 下一个期望字节序号
+            int expectedAck = tcpPack.getTcpH().getTh_seq() + tcpPack.getTcpS().getData().length;
+            if (currentAck == expectedAck) {
+                System.out.println("Clear:" + currentAck);
+                flag = 1;
+                timer.cancel();
+            }
+            // 错误 / 重复ACK -> 什么也不做
+            // 由 Timer 负责是否重传，但是不是在这里立即重传，应该由计时器触发重传（重传的代码在45行）
         }
     }
 

@@ -23,6 +23,8 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     @Override
     //接收到数据报：检查校验和，设置回复的ACK报文段
     public void rdt_recv(TCP_PACKET recvPack) {
+        int recvSeq = recvPack.getTcpH().getTh_seq();
+        int[] recvData = recvPack.getTcpS().getData();
         //检查校验码，生成ACK
         if (CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()) {
             //生成ACK报文段（设置确认号）
@@ -57,7 +59,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         System.out.println();
 
         //交付数据（每20组数据交付一次）
-        if (dataQueue.size() == 20)
+        if (dataQueue.size() >= 20)
             deliver_data();
     }
 
@@ -95,7 +97,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 			6.丢包 / 延迟
 			7.出错 / 丢包 / 延迟
 		 */
-        tcpH.setTh_eflag((byte) 7);    //eFlag=0，信道无错误
+        tcpH.setTh_eflag((byte) 7);
 
         //发送数据报
         client.send(replyPack);
