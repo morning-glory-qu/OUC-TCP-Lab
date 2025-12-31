@@ -6,29 +6,18 @@ package com.ouc.tcp.test;
  */
 
 enum ReceiverFlag {
-    NOT_RECEIVED,
-    RECEIVED
+    WAIT, BUFFERED
+    // WAIT: 等待接收或已经确认(最初状态或者最终状态)
+    // BUFFERED: 已经接收但还未确认(中间状态)
 }
 
 public class ReceiverWindowElem extends WindowElem {
 
     public ReceiverWindowElem() {
         super();
-        this.flag = ReceiverFlag.NOT_RECEIVED.ordinal();
     }
 
-    /** 是否已经接收 */
-    public boolean isReceived() {
-        return this.flag == ReceiverFlag.RECEIVED.ordinal();
-    }
-
-    /** 接收并缓存数据包 */
-    public void receivePacket() {
-        this.flag = ReceiverFlag.RECEIVED.ordinal();
-    }
-
-    /** 重置窗口元素（窗口右移） */
-    public void resetElem() {
-        super.resetElem();
+    public boolean isBuffered() {
+        return flag == ReceiverFlag.BUFFERED.ordinal();
     }
 }
