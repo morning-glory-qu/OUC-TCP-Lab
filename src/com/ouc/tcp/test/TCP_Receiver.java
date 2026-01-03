@@ -3,16 +3,20 @@
 package com.ouc.tcp.test;
 
 import com.ouc.tcp.client.TCP_Receiver_ADT;
+import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.TCP_PACKET;
 
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.TimerTask;
 
 public class TCP_Receiver extends TCP_Receiver_ADT {
     private TCP_PACKET ackPack;    //回复的ACK报文段
     private ReceiverSlidingWindow window = new ReceiverSlidingWindow(16);
+    private UDT_Timer timer = new UDT_Timer(); // 添加定时器用于延迟ACK
+
     /*构造函数*/
     public TCP_Receiver() {
         super();    //调用超类构造函数
@@ -27,31 +31,39 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         // 检查校验和
         if (CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()) {
 
-            //  将数据包交给窗口缓冲区处理，并获取处理结果
-            // 该方法会判断包是有序的、重复的、失序的，还是新的窗口基点
+            // 将数据包交给窗口缓冲区处理，并获取处理结果
             int bufferResult = window.bufferPacket(recvPack);
             System.out.println("bufferResult: " + bufferResult);
 
-            // 决定是否发送ACK。对于有序包、重复包或作为基点的包，都需要发送ACK。
-            if (bufferResult == AckFlag.ORDERED.ordinal() ||
-                    bufferResult == AckFlag.DUPLICATE.ordinal() ||
-                    bufferResult == AckFlag.IS_BASE.ordinal()) {
-
-                // ACK号设置为接收到的数据包的序号
-                tcpH.setTh_ack(recvPack.getTcpH().getTh_seq());
-                ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-                tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-                reply(ackPack);
-            }
-
-            // 处理数据交付：如果新到的包正好是接收窗口的基点（IS_BASE），说明可能有连续的有序数据可以交付了
+            // 延迟ACK策略：只在特定条件下发送ACK
             if (bufferResult == AckFlag.IS_BASE.ordinal()) {
+                // 处理基础包：交付数据并设置延迟ACK
                 TCP_PACKET packet = window.getPacketToDeliver();
-                // 循环从窗口中提取所有已按序到达、可以交付给上层应用的数据包
                 while (packet != null) {
                     dataQueue.add(packet.getTcpS().getData());
                     packet = window.getPacketToDeliver();
                 }
+
+                // 设置ACK号
+                tcpH.setTh_ack(recvPack.getTcpH().getTh_seq());
+                ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
+                tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
+
+                // 延迟发送ACK（500ms），等待可能到达的更多数据包
+                if (timer != null) {
+                    timer.cancel();
+                    timer = new UDT_Timer();
+                    timer.schedule(new TimerTask() {
+                        public void run() {
+                            reply(ackPack);
+                        }
+                    }, 500); // 延迟500毫秒[1](@ref)
+                }
+
+            } else if (bufferResult == AckFlag.ORDERED.ordinal() ||
+                    bufferResult == AckFlag.DUPLICATE.ordinal()) {
+                // 对于有序包或重复包，不立即回复ACK，等待延迟ACK机制处理
+                // 这是延迟ACK策略的关键区别：不立即回复每个包[7](@ref)
             }
 
         } else {
@@ -91,20 +103,9 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     //回复ACK报文段
     public void reply(TCP_PACKET replyPack) {
         //设置错误控制标志
-		/*
-		 	0.信道无差错
-			1.只出错
-			2.只丢包
-			3.只延迟
-			4.出错 / 丢包
-			5.出错 / 延迟
-			6.丢包 / 延迟
-			7.出错 / 丢包 / 延迟
-		 */
         tcpH.setTh_eflag((byte) 7);
 
         //发送数据报
         client.send(replyPack);
     }
-
 }
