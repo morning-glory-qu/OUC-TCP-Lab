@@ -3,25 +3,27 @@ package com.ouc.tcp.test;
 import com.ouc.tcp.message.TCP_PACKET;
 
 /**
- * TCP 接收方滑动窗口
+ * TCP 接收方滑动窗口（适用于不带拥塞控制的TCP）
  * 核心功能：
- * 1. 接收并缓存数据包（允许乱序到达）
- * 2. 判断数据包状态（按序、重复、乱序、基序号包）
+ * 1. 接收并缓存数据包（支持乱序到达）
+ * 2. 选择性确认机制
  * 3. 按序将数据包交付给上层应用
  */
 
 enum AckFlag {
-    ORDERED, DUPLICATE, UNORDERED, IS_BASE
+    ORDERED, DUPLICATE, UNORDERED, IS_BASE, NEW_BUFFERED
     // ORDERED: 接收到的包是按序的
     // DUPLICATE: 接收到的包是重复的
-    // UNORDERED: 接收到的包提前送达，乱序
+    // UNORDERED: 接收到的包提前送达，乱序但已缓存
     // IS_BASE: 接收到的包是基序号的包，开始交付数据
+    // NEW_BUFFERED: 新包被成功缓存（选择性确认用）
 }
 
 public class ReceiverSlidingWindow {
     private final int windowSize;
     private final ReceiverWindowElem[] window;
-    private int baseSeq; // 期望收到的下一个数据包的 seq
+    private int baseSeq; // 期望收到的下一个数据包的seq
+    private int lastContinuousSeq; // 最后一个连续的数据包序号
 
     public ReceiverSlidingWindow(int windowSize) {
         this.windowSize = windowSize;
@@ -31,93 +33,149 @@ public class ReceiverSlidingWindow {
             this.window[i] = new ReceiverWindowElem();
         }
         this.baseSeq = 0;
+        this.lastContinuousSeq = -1; // 初始为-1，表示没有连续序列
     }
 
-
-     // 根据序列号计算其在窗口数组中的实际索引（取模运算，实现环形缓冲区）。
+    // 根据序列号计算其在窗口数组中的实际索引
     private int getIndex(int sequence) {
-        // 使用取模运算实现环形缓冲区，确保索引在 [0, windowSize-1] 范围内
         return sequence % windowSize;
     }
 
-
-     //处理接收到的数据包，将其缓存在窗口的相应位置，并返回该包的状态，允许缓存乱序包
+    // 处理接收到的数据包，支持选择性确认和乱序缓存
     public int bufferPacket(TCP_PACKET packet) {
-        // 计算数据包的逻辑序列号
         int packetDataLength = packet.getTcpS().getData().length;
         int seq = (packet.getTcpH().getTh_seq() - 1) / packetDataLength;
 
         // 检查序列号是否在当前接收窗口内 [baseSeq, baseSeq + windowSize - 1]
         if (seq >= baseSeq + windowSize) {
-            // 序列号超出窗口右边界，是后面的包，当前无法处理，应返回乱序状态
             return AckFlag.UNORDERED.ordinal();
         }
         if (seq < baseSeq) {
-            // 序列号小于基序号，是重复包或过时包
             return AckFlag.DUPLICATE.ordinal();
         }
 
-        // 序列号在窗口内，缓存数据包
+        // 检查是否已经缓存过该包（避免重复处理）
         int currentIndex = getIndex(seq);
-        window[currentIndex].setElem(packet, ReceiverFlag.BUFFERED.ordinal());
-
-        // 判断是否是期望的基序号包
-        if (seq == baseSeq) {
-            return AckFlag.IS_BASE.ordinal();
+        if (window[currentIndex].isBuffered() || window[currentIndex].isDelivered()) {
+            return AckFlag.DUPLICATE.ordinal();
         }
-        // 是窗口内但非基序号的包（乱序但有效，已缓存）
-        return AckFlag.ORDERED.ordinal();
+
+        // 缓存数据包
+        window[currentIndex].setElem(packet, ReceiverFlag.BUFFERED.ordinal());
+        window[currentIndex].bufferPacket(); // 标记为已缓存
+        window[currentIndex].setReceiveTimestamp(System.currentTimeMillis());
+
+        // 判断包是否按序到达
+        if (seq == baseSeq) {
+            // 更新连续序列号
+            updateLastContinuousSeq();
+            return AckFlag.IS_BASE.ordinal();
+        } else {
+            // 乱序包，但已成功缓存
+            window[currentIndex].setInOrder(false);
+            return AckFlag.NEW_BUFFERED.ordinal();
+        }
     }
 
-    /**
-     * 获取当前可以按序交付给上层应用的数据包。
-     * 该方法会检查基序号位置的数据包是否已缓存，如果已缓存则取出并交付，同时窗口基序号前移。
-     */
+    // 更新最后一个连续的数据包序号
+    private void updateLastContinuousSeq() {
+        int currentSeq = baseSeq;
+        while (currentSeq < baseSeq + windowSize) {
+            int index = getIndex(currentSeq);
+            if (window[index].isBuffered() || window[index].isDelivered()) {
+                lastContinuousSeq = currentSeq;
+                currentSeq++;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 获取当前可以按序交付的数据包（支持连续交付）
     public TCP_PACKET getPacketToDeliver() {
         int currentIndex = getIndex(baseSeq);
         ReceiverWindowElem currentElem = window[currentIndex];
 
-        // 检查基序号位置的数据包是否已缓存
         if (!currentElem.isBuffered()) {
-            return null; // 基序号包尚未到达，无法进行连续交付
+            return null;
         }
 
-        // 获取数据包，重置窗口单元状态，并滑动窗口基序号
+        // 获取数据包并标记为已交付
         TCP_PACKET packetToDeliver = currentElem.getTcpPacket();
+        currentElem.deliverPacket(); // 标记为已交付
         currentElem.resetElem();
-        baseSeq++; // 窗口基序号向前滑动一位
 
+        baseSeq++; // 滑动窗口基序号
+
+        // 检查是否有更多连续包可以交付
         return packetToDeliver;
     }
 
-    /**
-     * 获取当前的窗口基序号。
-     * 这个值通常用于在ACK报文中告知发送方接收方期望的下一个序列号。
-     */
-    public int getBaseSeq() {
-        return baseSeq;
-    }
+    // 获取需要选择性确认的包序列号（用于SACK机制）
+    public int[] getSelectiveAckSequences() {
+        int[] ackSequences = new int[windowSize];
+        int count = 0;
 
-     // 检查接收窗口是否已满（即所有位置都已缓存数据包）。
-    public boolean isFull() {
-        // 检查从baseSeq到baseSeq+windowSize-1是否都有数据
         for (int i = baseSeq; i < baseSeq + windowSize; i++) {
-            if (!window[getIndex(i)].isBuffered()) {
-                return false;
+            int index = getIndex(i);
+            if (window[index].isBuffered() && !window[index].isDelivered()) {
+                ackSequences[count++] = i;
             }
         }
-        return true;
+
+        // 返回实际长度的数组
+        int[] result = new int[count];
+        System.arraycopy(ackSequences, 0, result, 0, count);
+        return result;
     }
 
+    // 获取接收窗口状态信息（用于调试和监控）
+    public String getWindowStatus() {
+        StringBuilder status = new StringBuilder();
+        status.append("Window BaseSeq: ").append(baseSeq)
+                .append(", LastContinuousSeq: ").append(lastContinuousSeq)
+                .append(", AvailableSpace: ").append(getAvailableSpace());
+        return status.toString();
+    }
 
     // 获取当前接收窗口的可用空间
     public int getAvailableSpace() {
         int bufferedCount = 0;
         for (int i = 0; i < windowSize; i++) {
-            if (window[i].isBuffered()) {
+            if (window[i].isBuffered() || window[i].isDelivered()) {
                 bufferedCount++;
             }
         }
         return windowSize - bufferedCount;
+    }
+
+    // 获取基序号（期望的下一个序列号）
+    public int getBaseSeq() {
+        return baseSeq;
+    }
+
+    // 获取最后一个连续序列号（用于选择性确认）
+    public int getLastContinuousSeq() {
+        return lastContinuousSeq;
+    }
+
+    // 检查特定序列号是否已缓存
+    public boolean isPacketBuffered(int seq) {
+        if (seq < baseSeq || seq >= baseSeq + windowSize) {
+            return false;
+        }
+        int index = getIndex(seq);
+        return window[index].isBuffered();
+    }
+
+    // 获取窗口中使用率（用于性能监控）
+    public double getWindowUsage() {
+        int used = 0;
+        for (int i = 0; i < windowSize; i++) {
+            if (window[i].isBuffered() || window[i].isDelivered()) {
+                used++;
+            }
+        }
+        return (double) used / windowSize;
     }
 }
