@@ -10,12 +10,16 @@ import com.ouc.tcp.message.TCP_PACKET;
 import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.TCP_PACKET;
 
+enum WindowFlag{
+    FULL,NOT_FULL
+}
+
+
 public class TCP_Sender extends TCP_Sender_ADT {
 
     private TCP_PACKET tcpPack;    //待发送的TCP数据报
     private volatile int flag = 0; // 0：未确认，1：已确认
-    private UDT_Timer timer = null; // 定时器
-    private UDT_RetransTask reTrans = null; // 重传任务
+    private final SenderSlidingWindow window = new SenderSlidingWindow(8); // 发送窗口，大小为8
 
     /*构造函数*/
     public TCP_Sender() {
@@ -34,22 +38,21 @@ public class TCP_Sender extends TCP_Sender_ADT {
         //更新带有checksum的TCP 报文头
         tcpH.setTh_sum(CheckSum.computeChkSum(tcpPack));
         tcpPack.setTcpH(tcpH);
-
-        //发送TCP数据报
-        udt_send(tcpPack);
-        flag = 0;
-
-        // 启动计时器
-        timer = new UDT_Timer();
-        reTrans = new UDT_RetransTask(client, tcpPack);
-        timer.schedule(reTrans, 3000, 3000); // 3s后开始重传，每1s重传1次
-
-        // 等待ACK或者超时
-        while (flag == 0) {
+        // 窗口满
+        if(window.isFull()){
+            flag = WindowFlag.FULL.ordinal();
+        }
+        // 等待窗口滑动(忙等待)
+        while (flag == WindowFlag.FULL.ordinal()){
             Thread.onSpinWait();
         }
 
-
+        try {
+            window.pushPacket(tcpPack.clone());
+        } catch (CloneNotSupportedException e) {
+            throw new RuntimeException(e);
+        }
+        window.sendPacket(this, client, 1000, 1000); // 1秒间隔发送包
     }
 
     @Override
@@ -78,16 +81,14 @@ public class TCP_Sender extends TCP_Sender_ADT {
         //循环检查ackQueue
         //循环检查确认号对列中是否有新收到的ACK
         if (!ackQueue.isEmpty()) {
+            // 从ACK队列取出ACK
             int currentAck = ackQueue.poll();
-            // 正确 ACK = 下一个期望字节序号
-            int expectedAck = tcpPack.getTcpH().getTh_seq() + tcpPack.getTcpS().getData().length;
-            if (currentAck == expectedAck) {
-                System.out.println("Clear:" + currentAck);
-                flag = 1;
-                timer.cancel();
+            // 处理接收到的ACK
+            window.ackPacket(currentAck);
+            // 窗口有空闲，恢复发送
+            if(!window.isFull()){
+                flag = WindowFlag.NOT_FULL.ordinal();
             }
-            // 错误 / 重复ACK -> 什么也不做
-            // 由 Timer 负责是否重传，但是不是在这里立即重传，应该由计时器触发重传（重传的代码在45行）
         }
     }
 
