@@ -56,6 +56,16 @@ public class SenderWindowElem extends WindowElem {
         return sendTimestamp;
     }
 
+    // 设置定时器
+    public void setTimer(UDT_Timer timer) {
+        this.timer = timer;
+    }
+
+    // 获取定时器
+    public UDT_Timer getTimer() {
+        return timer;
+    }
+
     /** 强制取消计时器 - 用于连接终止或重置 */
     public void cancelTimer() {
         if (this.timer != null) {
