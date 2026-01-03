@@ -19,7 +19,8 @@ public class TCP_Sender extends TCP_Sender_ADT {
 
     private TCP_PACKET tcpPack;    //待发送的TCP数据报
     private volatile int flag = 0; // 0：未确认，1：已确认
-    private final SenderSlidingWindow window = new SenderSlidingWindow(8); // 发送窗口，大小为8
+    private TCP_Sender sender;
+    private final SenderSlidingWindow window = new SenderSlidingWindow(8,this,1000,1000); // 发送窗口，大小为8
 
     /*构造函数*/
     public TCP_Sender() {
@@ -52,7 +53,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
         } catch (CloneNotSupportedException e) {
             throw new RuntimeException(e);
         }
-        window.sendPacket(this, client, 1000, 1000); // 1秒间隔发送包
+        window.sendPacket(); // 1秒间隔发送包
     }
 
     @Override
