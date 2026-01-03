@@ -1,52 +1,74 @@
 package com.ouc.tcp.test;
 
-import com.ouc.tcp.client.Client;
-import com.ouc.tcp.client.UDT_RetransTask;
+import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.TCP_PACKET;
 
-
-// TCP发送方的滑动窗口实现。
+import java.util.TimerTask;
 
 public class SenderSlidingWindow {
     private final int windowSize;
     private final SenderWindowElem[] window;
-    private int baseIndex; // 指向窗口中 最早发送 的未确认数据包
+    private int baseIndex; // 指向窗口中最早发送的未确认数据包
     private int nextToSendIndex; // 指向下一个待发送的数据包
     private int rearIndex; // 窗口中最后一个数据包的位置
+    private UDT_Timer timer;
+    private TCP_Sender sender;
+    private int delay;
+    private int period;
 
-    public SenderSlidingWindow(int windowSize) {
+
+    public SenderSlidingWindow(int windowSize, TCP_Sender sender, int delay, int period) {
+        this.sender = sender;
         this.windowSize = windowSize;
         this.window = new SenderWindowElem[windowSize];
-        // 初始化窗口中的每个元素
         for (int i = 0; i < windowSize; i++) {
             this.window[i] = new SenderWindowElem();
         }
         this.baseIndex = 0;
         this.nextToSendIndex = 0;
         this.rearIndex = 0;
+        this.timer = new UDT_Timer();
+        this.delay = delay;
+        this.period = period;
     }
 
-    // 根据序列号计算其在窗口数组中的实际索引（取模运算）。
+    public static class GBNRetransmitTask extends TimerTask {
+        private TCP_Sender sender;
+        private SenderSlidingWindow window;
+
+        public GBNRetransmitTask(TCP_Sender sender, SenderSlidingWindow window) {
+            this.sender = sender;
+            this.window = window;
+        }
+
+        public void run() {
+            // 超时时重传所有已发送但未确认的包
+            window.retransmitAllUnacked();
+        }
+    }
+
+
+
     private int getIndex(int sequence) {
         return sequence % windowSize;
     }
 
-    // 检查发送窗口是否已满（无法再添加新的数据包）。
     public boolean isFull() {
         return rearIndex - baseIndex == windowSize;
     }
 
-    // 检查发送窗口是否为空（没有任何数据包，包括已发送和未发送）。
-    public boolean isEmpty() {
+    private boolean isEmpty() {
         return baseIndex == rearIndex;
     }
 
-    // 检查窗口内所有数据包是否都已发送（但未必已确认）。
-    public boolean isAllSent() {
+    private boolean isAllSent() {
         return nextToSendIndex == rearIndex;
     }
 
-    // 将一个新的数据包加入发送窗口（通常标记为未确认状态）。
+    private boolean atBase() {
+        return nextToSendIndex == baseIndex;
+    }
+
     public void pushPacket(TCP_PACKET packet) {
         if (isFull()) {
             throw new IllegalStateException("Cannot push packet. Sender window is full.");
@@ -56,44 +78,82 @@ public class SenderSlidingWindow {
         rearIndex++;
     }
 
-     // 发送下一个待发送的数据包，并启动其重传定时器。
-     // 如果窗口为空或所有包已发送，则方法直接返回。
-    public void sendPacket(TCP_Sender sender, Client client, int delay, int period) {
+    // 重传所有已发送但未确认的包
+    private void retransmitAllUnacked() {
+        System.out.println("Timeout! Retransmitting all unacked packets from " + baseIndex + " to " + (nextToSendIndex - 1));
+
+        for (int i = baseIndex; i < nextToSendIndex; i++) {
+            int currentIndex = getIndex(i);
+            TCP_PACKET packet = window[currentIndex].getTcpPacket();
+            if (!window[currentIndex].isAcked()) {
+                sender.udt_send(packet);
+            }
+        }
+
+        // 重启定时器
+        resetTimer();
+    }
+
+    // 重置定时器
+    public void resetTimer() {
+        if (timer != null) {
+            timer.cancel();
+        }
+        timer = new UDT_Timer();
+        if (baseIndex < nextToSendIndex) { // 有未确认的包才启动定时器
+            timer.schedule(new GBNRetransmitTask(sender, this), delay, period);
+        }
+    }
+
+    public void sendPacket() {
         if (isEmpty() || isAllSent()) {
-            return; // 无包可发
+            return;
         }
 
         int currentIndex = getIndex(nextToSendIndex);
         TCP_PACKET packetToSend = window[currentIndex].getTcpPacket();
 
-        // 创建并启动重传定时器
-        UDT_RetransTask retransmitTask = new UDT_RetransTask(client, packetToSend);
-        window[currentIndex].scheduleTask(retransmitTask, delay, period);
+        // 如果是第一个未确认的包，启动定时器
+        if (atBase()) {
+            resetTimer();
+        }
+
         nextToSendIndex++;
         sender.udt_send(packetToSend);
     }
 
-
-     // 处理接收到的确认包（ACK）。
-     //找到对应序列号且未确认的数据包，将其标记为已确认，并尝试向前滑动窗口。
+    // 修改ACK处理逻辑：采用累积确认
     public void ackPacket(int ackSequence) {
-        // 遍历当前窗口，寻找匹配的序列号
-        for (int i = baseIndex; i != rearIndex; i++) {
+        boolean windowMoved = false;
+
+        // GBN累积确认：确认n号包意味着n及之前的所有包都已正确接收
+        for (int i = baseIndex; i < rearIndex; i++) {
             int currentIndex = getIndex(i);
             SenderWindowElem elem = window[currentIndex];
             TCP_PACKET packet = elem.getTcpPacket();
 
-            // 找到匹配且未确认的包
-            if (packet.getTcpH().getTh_seq() == ackSequence && !elem.isAcked()) {
-                elem.ackPacket(); // 标记为已确认
-                break;
+            // 累积确认：确认序号为ackSequence的包，意味着所有序号小于等于ackSequence的包都已正确接收
+            if (packet.getTcpH().getTh_seq() <= ackSequence && !elem.isAcked()) {
+                elem.ackPacket();
+                windowMoved = true;
             }
         }
-        // 从base开始，连续确认的包都可以移出窗口
+
+        // 滑动窗口：移动baseIndex到第一个未确认的包
         while (baseIndex < rearIndex && window[getIndex(baseIndex)].isAcked()) {
             int currentIndex = getIndex(baseIndex);
-            window[currentIndex].resetElem(); // 重置该窗口单元
-            baseIndex++; // 窗口基索引前移
+            window[currentIndex].resetElem();
+            baseIndex++;
+        }
+
+        // 如果窗口移动了且有未确认的包，重置定时器
+        if (windowMoved && baseIndex < nextToSendIndex) {
+            resetTimer();
+        } else if (baseIndex == nextToSendIndex) {
+            // 所有包都已确认，停止定时器
+            if (timer != null) {
+                timer.cancel();
+            }
         }
     }
 }
