@@ -60,6 +60,10 @@ public class ReceiverWindowElem extends WindowElem {
     public boolean isInOrder() {
         return this.isInOrder;
     }
+    // 设置数据包接收时间戳
+    public void setReceiveTimestamp(long timestamp) {
+        this.receiveTimestamp = timestamp;
+    }
 
     /** 获取接收时间戳 */
     public long getReceiveTimestamp() {
