@@ -12,8 +12,7 @@ import java.io.IOException;
 
 public class TCP_Receiver extends TCP_Receiver_ADT {
     private TCP_PACKET ackPack;    //回复的ACK报文段
-    int sequence = 1;//用于记录当前待接收的包序号，也就是期望接受的下一个数据字节的起始序号(TCP的seq只记录数据部分第一个字节在原始字节流的位置)
-
+    private ReceiverSlidingWindow window = new ReceiverSlidingWindow(16);
     /*构造函数*/
     public TCP_Receiver() {
         super();    //调用超类构造函数
@@ -21,46 +20,51 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     }
 
     @Override
-    //接收到数据报：检查校验和，设置回复的ACK报文段
     public void rdt_recv(TCP_PACKET recvPack) {
         int recvSeq = recvPack.getTcpH().getTh_seq();
         int[] recvData = recvPack.getTcpS().getData();
-        //检查校验码，生成ACK
-        if (CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()) {
-            //生成ACK报文段（设置确认号）
-            tcpH.setTh_ack(sequence);
-            ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-            tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-            //回复ACK报文段
-            reply(ackPack);
 
-            //将接收到的正确有序的数据插入data队列，准备交付
-            if (recvPack.getTcpH().getTh_seq() == sequence) { // 当前接收到的数据包 如果和期望序号匹配
-                dataQueue.add(recvPack.getTcpS().getData()); // 把数据部分加入到数据队列
-                sequence += recvPack.getTcpS().getData().length; // 更新 sequence = sequence + 当前数据包长度
-                System.out.println("RDT3.0: In-order packet accepted. New sequence: " + sequence);
-            } else {
-                // RDT3.0新增：处理重复或失序包（发送ACK但不交付数据）
-                System.out.println("RDT3.0: Duplicate/out-of-order packet. Expected: " + sequence +
-                        ", Received: " + recvPack.getTcpH().getTh_seq());
+        // 检查校验和
+        if (CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()) {
+
+            //  将数据包交给窗口缓冲区处理，并获取处理结果
+            // 该方法会判断包是有序的、重复的、失序的，还是新的窗口基点
+            int bufferResult = window.bufferPacket(recvPack);
+            System.out.println("bufferResult: " + bufferResult);
+
+            // 决定是否发送ACK。对于有序包、重复包或作为基点的包，都需要发送ACK。
+            if (bufferResult == AckFlag.ORDERED.ordinal() ||
+                    bufferResult == AckFlag.DUPLICATE.ordinal() ||
+                    bufferResult == AckFlag.IS_BASE.ordinal()) {
+
+                // ACK号设置为接收到的数据包的序号
+                tcpH.setTh_ack(recvPack.getTcpH().getTh_seq());
+                ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
+                tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
+                reply(ackPack);
             }
+
+            // 处理数据交付：如果新到的包正好是接收窗口的基点（IS_BASE），说明可能有连续的有序数据可以交付了
+            if (bufferResult == AckFlag.IS_BASE.ordinal()) {
+                TCP_PACKET packet = window.getPacketToDeliver();
+                // 循环从窗口中提取所有已按序到达、可以交付给上层应用的数据包
+                while (packet != null) {
+                    dataQueue.add(packet.getTcpS().getData());
+                    packet = window.getPacketToDeliver();
+                }
+            }
+
         } else {
-            // 校验错误的情况 - 保持原逻辑，但ACK号设置与上面一致
-            System.out.println("Receive Computed: " + CheckSum.computeChkSum(recvPack));
-            System.out.println("Received Packet" + recvPack.getTcpH().getTh_sum());
-            System.out.println("Problem: Packet Number: " + recvPack.getTcpH().getTh_seq() + " + InnerSeq:  " + sequence);
-            tcpH.setTh_ack(sequence);
-            ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-            tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-            //回复ACK报文段
-            reply(ackPack);
+            // 校验和错误的包：直接丢弃，不回复ACK。
+            System.out.println("Checksum failed. Packet dropped, no ACK sent.");
         }
 
         System.out.println();
 
-        //交付数据（每20组数据交付一次）
-        if (dataQueue.size() >= 20)
+        // 交付数据
+        if (!dataQueue.isEmpty()) {
             deliver_data();
+        }
     }
 
     @Override
