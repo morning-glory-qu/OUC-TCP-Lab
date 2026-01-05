@@ -60,16 +60,23 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     public void deliver_data() {
         //检查dataQueue，将数据写入文件
         File fw = new File("recvData.txt");
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(fw, true))) {
+        BufferedWriter writer;
+
+        try {
+            writer = new BufferedWriter(new FileWriter(fw, true));
+
             //循环检查data队列中是否有新交付数据
-            while (!dataQueue.isEmpty()) {
+            while(!dataQueue.isEmpty()) {
                 int[] data = dataQueue.poll();
+
                 //将数据写入文件
-                for (int datum : data) {
-                    writer.write(datum + "\n");
+                for(int i = 0; i < data.length; i++) {
+                    writer.write(data[i] + "\n");
                 }
-                writer.flush();        // 清空输出缓存
+
+                writer.flush();		//清空输出缓存
             }
+            writer.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
