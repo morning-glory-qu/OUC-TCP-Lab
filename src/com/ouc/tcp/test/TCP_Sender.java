@@ -45,9 +45,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
         timer.schedule(reTrans, 3000, 3000); // 3s后开始重传，每1s重传1次
 
         // 等待ACK或者超时
-        while (flag == 0) {
-            Thread.onSpinWait();
-        }
+        waitACK();
 
 
     }
