@@ -34,10 +34,10 @@ public class TCP_Sender extends TCP_Sender_ADT {
         flag = 0;
 
         //等待ACK报文
-        // waitACK();
-        while (flag == 0) {
-            Thread.onSpinWait(); // 或者简单的空循环
-        }
+         waitACK();
+//        while (flag == 0) {
+//            Thread.onSpinWait(); // 或者简单的空循环
+//        }
     }
 
     @Override
@@ -55,21 +55,21 @@ public class TCP_Sender extends TCP_Sender_ADT {
     public void waitACK() {
         //循环检查ackQueue
         //循环检查确认号对列中是否有新收到的ACK
-        if (ackQueue.isEmpty()) {
-            return;
+        while (!ackQueue.isEmpty()) {
+            int currentAck = ackQueue.poll();
+            // System.out.println("CurrentAck: "+currentAck);
+            if (currentAck == tcpPack.getTcpH().getTh_seq()) {
+                System.out.println("Clear: " + tcpPack.getTcpH().getTh_seq());
+                flag = 1;
+                //break;
+            } else {
+                System.out.println("Retransmit: " + tcpPack.getTcpH().getTh_seq());
+                udt_send(tcpPack);
+                flag = 0;
+            }
         }
 
-        int currentAck = ackQueue.poll();
-        // System.out.println("CurrentAck: "+currentAck);
-        if (currentAck == tcpPack.getTcpH().getTh_seq()) {
-            System.out.println("Clear: " + tcpPack.getTcpH().getTh_seq());
-            flag = 1;
-            //break;
-        } else {
-            System.out.println("Retransmit: " + tcpPack.getTcpH().getTh_seq());
-            udt_send(tcpPack);
-            flag = 0;
-        }
+
     }
 
     @Override
