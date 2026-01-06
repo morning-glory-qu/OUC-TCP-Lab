@@ -2,6 +2,7 @@ package com.ouc.tcp.test;
 
 import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.TCP_PACKET;
+
 import java.util.TimerTask;
 
 public class SenderSlidingWindow {
@@ -10,12 +11,13 @@ public class SenderSlidingWindow {
     private int baseIndex; // 指向窗口中最早发送的未确认数据包
     private int nextToSendIndex; // 指向下一个待发送的数据包
     private int rearIndex; // 窗口中最后一个数据包的位置
-    private TCP_Sender sender;
+    private UDT_Timer timer;
+    private final TCP_Sender sender;
+    private final int delay;
+    private final int period;
 
-    // 移除全局定时器，改为每个包独立管理
-    // private UDT_Timer timer;
 
-    public SenderSlidingWindow(int windowSize, TCP_Sender sender) {
+    public SenderSlidingWindow(int windowSize, TCP_Sender sender, int delay, int period) {
         this.sender = sender;
         this.windowSize = windowSize;
         this.window = new SenderWindowElem[windowSize];
@@ -25,26 +27,26 @@ public class SenderSlidingWindow {
         this.baseIndex = 0;
         this.nextToSendIndex = 0;
         this.rearIndex = 0;
-        // 移除全局定时器初始化
+        this.timer = new UDT_Timer();
+        this.delay = delay;
+        this.period = period;
     }
 
-    // 为每个包创建独立的重传任务
-    public static class SelectiveRetransmitTask extends TimerTask {
+    public static class GBNRetransmitTask extends TimerTask {
         private TCP_Sender sender;
         private SenderSlidingWindow window;
-        private int packetIndex; // 特定包在窗口中的索引
 
-        public SelectiveRetransmitTask(TCP_Sender sender, SenderSlidingWindow window, int packetIndex) {
+        public GBNRetransmitTask(TCP_Sender sender, SenderSlidingWindow window) {
             this.sender = sender;
             this.window = window;
-            this.packetIndex = packetIndex;
         }
 
         public void run() {
-            // 选择性重传：只重传超时的特定包
-            window.retransmitSinglePacket(packetIndex);
+            // 超时时重传所有已发送但未确认的包
+            window.sendWindow();
         }
     }
+
 
     private int getIndex(int sequence) {
         return sequence % windowSize;
@@ -62,6 +64,10 @@ public class SenderSlidingWindow {
         return nextToSendIndex == rearIndex;
     }
 
+    private boolean atBase() {
+        return nextToSendIndex == baseIndex;
+    }
+
     public void pushPacket(TCP_PACKET packet) {
         if (isFull()) {
             throw new IllegalStateException("Cannot push packet. Sender window is full.");
@@ -69,40 +75,24 @@ public class SenderSlidingWindow {
         int currentIndex = getIndex(rearIndex);
         window[currentIndex].setElem(packet, SenderFlag.NOT_ACKED.ordinal());
         rearIndex++;
+        sendPacket();
     }
 
-    // 选择性重传：只重传单个超时包
-    private void retransmitSinglePacket(int packetIndex) {
-        int actualIndex = getIndex(packetIndex);
-        SenderWindowElem elem = window[actualIndex];
-
-        if (!elem.isAcked()) {
-            TCP_PACKET packet = elem.getTcpPacket();
-            System.out.println("Timeout! Retransmitting packet with seq: " +
-                    packet.getTcpH().getTh_seq());
-
-            sender.udt_send(packet);
-
-            // 重启该包的定时器
-            startPacketTimer(packetIndex);
+    public void sendWindow() {
+        nextToSendIndex = baseIndex;
+        while (nextToSendIndex < rearIndex) {
+            sendPacket();
         }
     }
 
-    // 启动单个包的定时器
-    private void startPacketTimer(int packetIndex) {
-        int actualIndex = getIndex(packetIndex);
-        SenderWindowElem elem = window[actualIndex];
-
-        if (!elem.isAcked()) {
-            // 使用包独立的定时器
-            UDT_Timer packetTimer = new UDT_Timer();
-            int delay = 1000; // 1秒超时
-            int period = 1000;
-
-            packetTimer.schedule(new SelectiveRetransmitTask(sender, this, packetIndex), delay, period);
-
-            // 将定时器与包关联（需要在SenderWindowElem中添加timer字段）
-            // elem.setTimer(packetTimer);
+    // 重置定时器
+    public void resetTimer() {
+        if (timer != null) {
+            timer.cancel();
+        }
+        timer = new UDT_Timer();
+        if (baseIndex < nextToSendIndex) { // 有未确认的包才启动定时器
+            timer.schedule(new GBNRetransmitTask(sender, this), delay, period);
         }
     }
 
@@ -114,67 +104,30 @@ public class SenderSlidingWindow {
         int currentIndex = getIndex(nextToSendIndex);
         TCP_PACKET packetToSend = window[currentIndex].getTcpPacket();
 
-        // 为每个新发送的包启动独立定时器
-        startPacketTimer(nextToSendIndex);
+        // 如果是第一个未确认的包，启动定时器
+        if (atBase()) {
+            resetTimer();
+        }
 
         nextToSendIndex++;
         sender.udt_send(packetToSend);
-
-        System.out.println("Sent packet with seq: " + packetToSend.getTcpH().getTh_seq());
     }
 
-    // 修改ACK处理：选择性确认
+    // 修改ACK处理逻辑：采用累积确认
     public void ackPacket(int ackSequence) {
-        boolean windowMoved = false;
-
-        // 选择性确认：只确认特定序列号的包
-        for (int i = baseIndex; i < rearIndex; i++) {
+        // GBN累积确认：确认n号包意味着n及之前的所有包都已正确接收
+        for (int i = baseIndex; i != rearIndex; i++) {
             int currentIndex = getIndex(i);
             SenderWindowElem elem = window[currentIndex];
             TCP_PACKET packet = elem.getTcpPacket();
 
-            // 精确匹配确认序列号
-            if (packet.getTcpH().getTh_seq() == ackSequence && !elem.isAcked()) {
+            // 累积确认：确认序号为ackSequence的包，意味着所有序号小于等于ackSequence的包都已正确接收
+            if (packet.getTcpH().getTh_seq() <= ackSequence && !elem.isAcked()) {
                 elem.ackPacket();
-                System.out.println("ACK received for seq: " + ackSequence);
-
-                // 取消该包的定时器
-                // if (elem.getTimer() != null) {
-                //     elem.getTimer().cancel();
-                // }
-
-                windowMoved = true;
-                break; // 选择性确认只处理一个包
+                elem.resetElem();
+                baseIndex++;
+                resetTimer();
             }
         }
-
-        // 滑动窗口：移动baseIndex到第一个未确认的包
-        while (baseIndex < rearIndex && window[getIndex(baseIndex)].isAcked()) {
-            int currentIndex = getIndex(baseIndex);
-            window[currentIndex].resetElem();
-            baseIndex++;
-            windowMoved = true;
-        }
-
-        if (windowMoved) {
-            System.out.println("Window moved. Base index: " + baseIndex +
-                    ", Next to send: " + nextToSendIndex + ", Rear index: " + rearIndex);
-        }
-    }
-
-    // 添加序列号比较方法，处理序列号回绕
-    private boolean seqLessThanOrEqual(int seq1, int seq2) {
-        // 处理32位序列号回绕
-        return (seq1 <= seq2 && seq2 - seq1 < 0x7FFFFFFF) ||
-                (seq1 > seq2 && seq1 - seq2 > 0x7FFFFFFF);
-    }
-
-    // 添加窗口状态查询方法
-    public int getWindowUsed() {
-        return rearIndex - baseIndex;
-    }
-
-    public int getWindowAvailable() {
-        return windowSize - getWindowUsed();
     }
 }
