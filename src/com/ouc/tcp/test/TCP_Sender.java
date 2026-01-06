@@ -4,23 +4,13 @@
 package com.ouc.tcp.test;
 
 import com.ouc.tcp.client.TCP_Sender_ADT;
-import com.ouc.tcp.client.UDT_RetransTask;
 import com.ouc.tcp.message.TCP_PACKET;
-
-import com.ouc.tcp.client.UDT_Timer;
-import com.ouc.tcp.message.TCP_PACKET;
-
-enum WindowFlag{
-    FULL,NOT_FULL
-}
-
 
 public class TCP_Sender extends TCP_Sender_ADT {
 
     private TCP_PACKET tcpPack;    //待发送的TCP数据报
-    private volatile int flag = 0; // 0：未确认，1：已确认
     private TCP_Sender sender;
-    private final SenderSlidingWindow window = new SenderSlidingWindow(8,this,1000,1000); // 发送窗口，大小为8
+    private final SenderSlidingWindow window = new SenderSlidingWindow(8, this, 1000, 1000); // 发送窗口，大小为8
 
     /*构造函数*/
     public TCP_Sender() {
@@ -31,7 +21,6 @@ public class TCP_Sender extends TCP_Sender_ADT {
     @Override
     //可靠发送（应用层调用）：封装应用层数据，产生TCP数据报；需要修改
     public void rdt_send(int dataIndex, int[] appData) {
-
         //生成TCP数据报（设置序号和数据字段/校验和),注意打包的顺序
         tcpH.setTh_seq(dataIndex * appData.length + 1);//包序号设置为字节流号：
         tcpS.setData(appData);
@@ -39,12 +28,9 @@ public class TCP_Sender extends TCP_Sender_ADT {
         //更新带有checksum的TCP 报文头
         tcpH.setTh_sum(CheckSum.computeChkSum(tcpPack));
         tcpPack.setTcpH(tcpH);
-        // 窗口满
-        if(window.isFull()){
-            flag = WindowFlag.FULL.ordinal();
-        }
+
         // 等待窗口滑动(忙等待)
-        while (flag == WindowFlag.FULL.ordinal()){
+        while (window.isFull()) {
             Thread.onSpinWait();
         }
 
@@ -53,7 +39,6 @@ public class TCP_Sender extends TCP_Sender_ADT {
         } catch (CloneNotSupportedException e) {
             throw new RuntimeException(e);
         }
-        window.sendPacket(); // 1秒间隔发送包
     }
 
     @Override
@@ -86,10 +71,6 @@ public class TCP_Sender extends TCP_Sender_ADT {
             int currentAck = ackQueue.poll();
             // 处理接收到的ACK
             window.ackPacket(currentAck);
-            // 窗口有空闲，恢复发送
-            if(!window.isFull()){
-                flag = WindowFlag.NOT_FULL.ordinal();
-            }
         }
     }
 
