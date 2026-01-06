@@ -34,7 +34,7 @@ public class ReceiverSlidingWindow {
     }
 
 
-     // 根据序列号计算其在窗口数组中的实际索引（取模运算，实现环形缓冲区）。
+    // 根据序列号计算其在窗口数组中的实际索引（取模运算，实现环形缓冲区）。
     private int getIndex(int sequence) {
         // 使用取模运算实现环形缓冲区，确保索引在 [0, windowSize-1] 范围内
         return sequence % windowSize;
@@ -43,30 +43,28 @@ public class ReceiverSlidingWindow {
 
      //处理接收到的数据包，将其缓存在窗口的相应位置，并返回该包的状态，允许缓存乱序包
     public int bufferPacket(TCP_PACKET packet) {
-        // 计算数据包的逻辑序列号
+        // 1. 计算当前收到的包的逻辑序列号
         int packetDataLength = packet.getTcpS().getData().length;
         int seq = (packet.getTcpH().getTh_seq() - 1) / packetDataLength;
 
-        // 检查序列号是否在当前接收窗口内 [baseSeq, baseSeq + windowSize - 1]
-        if (seq >= baseSeq + windowSize) {
-            // 序列号超出窗口右边界，是后面的包，当前无法处理，应返回乱序状态
-            return AckFlag.UNORDERED.ordinal();
+        // 2. GBN 核心逻辑：只接受期望的那个序号 (baseSeq)
+        if (seq == baseSeq) {
+            // 是期望的包，存入（或直接交付上层），并准备接收下一个
+            // 在 GBN 中，其实不需要 window 数组缓存乱序包，只需要存当前这一个
+            window[getIndex(seq)].setElem(packet, ReceiverFlag.BUFFERED.ordinal());
+
+            // 注意：GBN 的 baseSeq 增加通常在接收逻辑处理完后
+            return AckFlag.IS_BASE.ordinal();
         }
+
+        // 3. 如果收到的是已处理过的包 (seq < baseSeq)
         if (seq < baseSeq) {
-            // 序列号小于基序号，是重复包或过时包
             return AckFlag.DUPLICATE.ordinal();
         }
 
-        // 序列号在窗口内，缓存数据包
-        int currentIndex = getIndex(seq);
-        window[currentIndex].setElem(packet, ReceiverFlag.BUFFERED.ordinal());
-
-        // 判断是否是期望的基序号包
-        if (seq == baseSeq) {
-            return AckFlag.IS_BASE.ordinal();
-        }
-        // 是窗口内但非基序号的包（乱序但有效，已缓存）
-        return AckFlag.ORDERED.ordinal();
+        // 4. 如果收到的是乱序的包 (seq > baseSeq)
+        // GBN 直接丢弃乱序包，不进行缓存
+        return AckFlag.UNORDERED.ordinal();
     }
 
     /**
@@ -90,15 +88,13 @@ public class ReceiverSlidingWindow {
         return packetToDeliver;
     }
 
-    /**
-     * 获取当前的窗口基序号。
-     * 这个值通常用于在ACK报文中告知发送方接收方期望的下一个序列号。
-     */
+
+     //  获取当前的窗口基序号。
     public int getBaseSeq() {
         return baseSeq;
     }
 
-     // 检查接收窗口是否已满（即所有位置都已缓存数据包）。
+    // 检查接收窗口是否已满（即所有位置都已缓存数据包）。
     public boolean isFull() {
         // 检查从baseSeq到baseSeq+windowSize-1是否都有数据
         for (int i = baseSeq; i < baseSeq + windowSize; i++) {
@@ -107,17 +103,5 @@ public class ReceiverSlidingWindow {
             }
         }
         return true;
-    }
-
-
-    // 获取当前接收窗口的可用空间
-    public int getAvailableSpace() {
-        int bufferedCount = 0;
-        for (int i = 0; i < windowSize; i++) {
-            if (window[i].isBuffered()) {
-                bufferedCount++;
-            }
-        }
-        return windowSize - bufferedCount;
     }
 }
