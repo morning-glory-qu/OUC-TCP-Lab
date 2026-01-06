@@ -12,9 +12,9 @@ public class SenderSlidingWindow {
     private int nextToSendIndex; // 指向下一个待发送的数据包
     private int rearIndex; // 窗口中最后一个数据包的位置
     private UDT_Timer timer;
-    private TCP_Sender sender;
-    private int delay;
-    private int period;
+    private final TCP_Sender sender;
+    private final int delay;
+    private final int period;
 
 
     public SenderSlidingWindow(int windowSize, TCP_Sender sender, int delay, int period) {
@@ -48,7 +48,6 @@ public class SenderSlidingWindow {
     }
 
 
-
     private int getIndex(int sequence) {
         return sequence % windowSize;
     }
@@ -76,6 +75,7 @@ public class SenderSlidingWindow {
         int currentIndex = getIndex(rearIndex);
         window[currentIndex].setElem(packet, SenderFlag.NOT_ACKED.ordinal());
         rearIndex++;
+        sendPacket();
     }
 
     public void sendWindow() {

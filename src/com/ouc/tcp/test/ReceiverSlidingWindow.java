@@ -11,11 +11,22 @@ import com.ouc.tcp.message.TCP_PACKET;
  */
 
 enum AckFlag {
-    ORDERED, DUPLICATE, UNORDERED, IS_BASE
+    ORDERED, DUPLICATE, UNORDERED, IS_BASE;
     // ORDERED: 接收到的包是按序的
     // DUPLICATE: 接收到的包是重复的
     // UNORDERED: 接收到的包提前送达，乱序
     // IS_BASE: 接收到的包是基序号的包，开始交付数据
+
+
+    @Override
+    public String toString() {
+        return switch (this) {
+            case ORDERED -> "ORDERED";
+            case DUPLICATE -> "DUPLICATE";
+            case UNORDERED -> "UNORDERED";
+            case IS_BASE -> "IS_BASE";
+        };
+    }
 }
 
 public class ReceiverSlidingWindow {
@@ -41,7 +52,7 @@ public class ReceiverSlidingWindow {
     }
 
 
-     //处理接收到的数据包，将其缓存在窗口的相应位置，并返回该包的状态，允许缓存乱序包
+    //处理接收到的数据包，将其缓存在窗口的相应位置，并返回该包的状态，允许缓存乱序包
     public int bufferPacket(TCP_PACKET packet) {
         // 1. 计算当前收到的包的逻辑序列号
         int packetDataLength = packet.getTcpS().getData().length;
@@ -89,7 +100,7 @@ public class ReceiverSlidingWindow {
     }
 
 
-     //  获取当前的窗口基序号。
+    //  获取当前的窗口基序号。
     public int getBaseSeq() {
         return baseSeq;
     }
