@@ -43,7 +43,7 @@ public class SenderSlidingWindow {
 
         public void run() {
             // 超时时重传所有已发送但未确认的包
-            window.retransmitAllUnacked();
+            window.sendWindow();
         }
     }
 
@@ -78,20 +78,11 @@ public class SenderSlidingWindow {
         rearIndex++;
     }
 
-    // 重传所有已发送但未确认的包
-    private void retransmitAllUnacked() {
-        System.out.println("Timeout! Retransmitting all unacked packets from " + baseIndex + " to " + (nextToSendIndex - 1));
-
-        for (int i = baseIndex; i < nextToSendIndex; i++) {
-            int currentIndex = getIndex(i);
-            TCP_PACKET packet = window[currentIndex].getTcpPacket();
-            if (!window[currentIndex].isAcked()) {
-                sender.udt_send(packet);
-            }
+    public void sendWindow() {
+        nextToSendIndex = baseIndex;
+        while (nextToSendIndex < rearIndex) {
+            sendPacket();
         }
-
-        // 重启定时器
-        resetTimer();
     }
 
     // 重置定时器
@@ -124,10 +115,8 @@ public class SenderSlidingWindow {
 
     // 修改ACK处理逻辑：采用累积确认
     public void ackPacket(int ackSequence) {
-        boolean windowMoved = false;
-
         // GBN累积确认：确认n号包意味着n及之前的所有包都已正确接收
-        for (int i = baseIndex; i < rearIndex; i++) {
+        for (int i = baseIndex; i != rearIndex; i++) {
             int currentIndex = getIndex(i);
             SenderWindowElem elem = window[currentIndex];
             TCP_PACKET packet = elem.getTcpPacket();
@@ -135,24 +124,9 @@ public class SenderSlidingWindow {
             // 累积确认：确认序号为ackSequence的包，意味着所有序号小于等于ackSequence的包都已正确接收
             if (packet.getTcpH().getTh_seq() <= ackSequence && !elem.isAcked()) {
                 elem.ackPacket();
-                windowMoved = true;
-            }
-        }
-
-        // 滑动窗口：移动baseIndex到第一个未确认的包
-        while (baseIndex < rearIndex && window[getIndex(baseIndex)].isAcked()) {
-            int currentIndex = getIndex(baseIndex);
-            window[currentIndex].resetElem();
-            baseIndex++;
-        }
-
-        // 如果窗口移动了且有未确认的包，重置定时器
-        if (windowMoved && baseIndex < nextToSendIndex) {
-            resetTimer();
-        } else if (baseIndex == nextToSendIndex) {
-            // 所有包都已确认，停止定时器
-            if (timer != null) {
-                timer.cancel();
+                elem.resetElem();
+                baseIndex++;
+                resetTimer();
             }
         }
     }
