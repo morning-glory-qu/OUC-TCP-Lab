@@ -20,51 +20,40 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     }
 
     @Override
+    //接收到数据报：检查校验和，设置回复的ACK报文段
     public void rdt_recv(TCP_PACKET recvPack) {
-        int recvSeq = recvPack.getTcpH().getTh_seq();
-        int[] recvData = recvPack.getTcpS().getData();
-
-        // 检查校验和
-        if (CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()) {
-
-            //  将数据包交给窗口缓冲区处理，并获取处理结果
-            // 该方法会判断包是有序的、重复的、失序的，还是新的窗口基点
-            int bufferResult = window.bufferPacket(recvPack);
-            System.out.println("bufferResult: " + bufferResult);
-
-            // 决定是否发送ACK。对于有序包、重复包或作为基点的包，都需要发送ACK。
-            if (bufferResult == AckFlag.ORDERED.ordinal() ||
-                    bufferResult == AckFlag.DUPLICATE.ordinal() ||
-                    bufferResult == AckFlag.IS_BASE.ordinal()) {
-
-                // ACK号设置为接收到的数据包的序号
-                tcpH.setTh_ack(recvPack.getTcpH().getTh_seq());
-                ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-                tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-                reply(ackPack);
-            }
-
-            // 处理数据交付：如果新到的包正好是接收窗口的基点（IS_BASE），说明可能有连续的有序数据可以交付了
-            if (bufferResult == AckFlag.IS_BASE.ordinal()) {
-                TCP_PACKET packet = window.getPacketToDeliver();
-                // 循环从窗口中提取所有已按序到达、可以交付给上层应用的数据包
-                while (packet != null) {
-                    dataQueue.add(packet.getTcpS().getData());
-                    packet = window.getPacketToDeliver();
-                }
-            }
-
-        } else {
-            // 校验和错误的包：直接丢弃，不回复ACK。
-            System.out.println("Checksum failed. Packet dropped, no ACK sent.");
+        // 1. 检查校验和，若出错则直接丢弃
+        if (CheckSum.computeChkSum(recvPack) != recvPack.getTcpH().getTh_sum()) {
+            System.out.println("Receive Corrupted Packet, Drop it.");
+            return;
         }
 
-        System.out.println();
+        // 2. 将数据包缓存到窗口
+        int bufferResult = window.bufferPacket(recvPack);
 
-        // 交付数据
-        if (!dataQueue.isEmpty()) {
+        // 3. 决定是否回复 ACK (ORDERED, DUPLICATE, IS_BASE 需要回复)
+        if (bufferResult == AckFlag.ORDERED.ordinal()
+                || bufferResult == AckFlag.DUPLICATE.ordinal()
+                || bufferResult == AckFlag.IS_BASE.ordinal()) {
+
+            tcpH.setTh_ack(recvPack.getTcpH().getTh_seq());
+            ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
+            tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
+            reply(ackPack);
+        }
+
+        // 4. 如果是窗口滑动的基准包，提取所有连续包并交付数据
+        if (bufferResult == AckFlag.IS_BASE.ordinal()) {
+            TCP_PACKET deliverPack;
+            // 循环取出所有已排序好的连续数据包
+            while ((deliverPack = window.getPacketToDeliver()) != null) {
+                dataQueue.add(deliverPack.getTcpS().getData());
+            }
+
+            // 只有在真正有连续数据需要写文件时才调用交付逻辑
             deliver_data();
         }
+
     }
 
     @Override
@@ -72,17 +61,25 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     public void deliver_data() {
         //检查dataQueue，将数据写入文件
         File fw = new File("recvData.txt");
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(fw, true))) {
+        BufferedWriter writer;
+
+        try {
+            writer = new BufferedWriter(new FileWriter(fw, true));
+
             //循环检查data队列中是否有新交付数据
             while (!dataQueue.isEmpty()) {
                 int[] data = dataQueue.poll();
+
                 //将数据写入文件
-                for (int datum : data) {
-                    writer.write(datum + "\n");
+                for (int i = 0; i < data.length; i++) {
+                    writer.write(data[i] + "\n");
                 }
-                writer.flush();        // 清空输出缓存
+
+                writer.flush();        //清空输出缓存
             }
+            writer.close();
         } catch (IOException e) {
+            // TODO Auto-generated catch block
             e.printStackTrace();
         }
     }
@@ -101,7 +98,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 			6.丢包 / 延迟
 			7.出错 / 丢包 / 延迟
 		 */
-        tcpH.setTh_eflag((byte) 7);
+        tcpH.setTh_eflag((byte) 4);
 
         //发送数据报
         client.send(replyPack);

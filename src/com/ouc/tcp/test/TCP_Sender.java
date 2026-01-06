@@ -18,8 +18,8 @@ enum WindowFlag{
 public class TCP_Sender extends TCP_Sender_ADT {
 
     private TCP_PACKET tcpPack;    //待发送的TCP数据报
-    private volatile int flag = 0; // 0：未确认，1：已确认
-    private final SenderSlidingWindow window = new SenderSlidingWindow(8); // 发送窗口，大小为8
+    private volatile int flag = 1; // 0：未确认，1：已确认
+    private final SenderSlidingWindow window = new SenderSlidingWindow(16); // 发送窗口，大小为8
 
     /*构造函数*/
     public TCP_Sender() {
@@ -29,31 +29,31 @@ public class TCP_Sender extends TCP_Sender_ADT {
 
     @Override
     //可靠发送（应用层调用）：封装应用层数据，产生TCP数据报；需要修改
+    // 此时负责的是将新的数据包装入发送窗口
     public void rdt_send(int dataIndex, int[] appData) {
-
         //生成TCP数据报（设置序号和数据字段/校验和),注意打包的顺序
         tcpH.setTh_seq(dataIndex * appData.length + 1);//包序号设置为字节流号：
         tcpS.setData(appData);
-        tcpPack = new TCP_PACKET(tcpH, tcpS, destinAddr);
+        //待发送的TCP数据报
+        TCP_PACKET tcpPack = new TCP_PACKET(tcpH, tcpS, destinAddr);
         //更新带有checksum的TCP 报文头
         tcpH.setTh_sum(CheckSum.computeChkSum(tcpPack));
         tcpPack.setTcpH(tcpH);
-        // 窗口满
-        if(window.isFull()){
-            flag = WindowFlag.FULL.ordinal();
-        }
-        // 等待窗口滑动(忙等待)
-        while (flag == WindowFlag.FULL.ordinal()){
+
+        // 空循环等待窗口滑动
+        while (window.isFull()) {
             Thread.onSpinWait();
         }
 
         try {
-            window.pushPacket(tcpPack.clone());
+            window.pushPacket(tcpPack.clone()); // 克隆数据包，将副本放入发送窗口。如果不克隆窗口中的数据和后续发送的数据共用同一个对象会造成数据覆盖，也不便于重传。
         } catch (CloneNotSupportedException e) {
             throw new RuntimeException(e);
         }
-        window.sendPacket(this, client, 1000, 1000); // 1秒间隔发送包
+
+        window.sendPacket(this, client, 1000, 1000); // 发送数据包
     }
+
 
     @Override
     //不可靠发送：将打包好的TCP数据报通过不可靠传输信道发送；仅需修改错误标志
@@ -69,7 +69,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
 			6.丢包 / 延迟
 			7.出错 / 丢包 / 延迟
 		 */
-        tcpH.setTh_eflag((byte) 7);
+        tcpH.setTh_eflag((byte) 4);
         //System.out.println("to send: "+stcpPack.getTcpH().getTh_seq());
         //发送数据报
         client.send(stcpPack);

@@ -35,6 +35,8 @@ public class SenderWindowElem extends WindowElem {
     /** 处理包确认：更新状态并停止计时器 */
     public void ackPacket() {
         this.flag = SenderFlag.ACKED.ordinal();
-        this.timer.cancel();
+        if (this.timer != null) {
+            this.timer.cancel();
+        }
     }
 }
