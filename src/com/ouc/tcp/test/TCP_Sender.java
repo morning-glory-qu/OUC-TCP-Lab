@@ -10,7 +10,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
 
     private TCP_PACKET tcpPack;    //待发送的TCP数据报
     private TCP_Sender sender;
-    private final SenderSlidingWindow window = new SenderSlidingWindow(8, this, 1000, 1000); // 发送窗口，大小为8
+    private final SenderSlidingWindow window = new SenderSlidingWindow(this); // 发送窗口，大小为8
 
     /*构造函数*/
     public TCP_Sender() {
@@ -30,7 +30,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
         tcpPack.setTcpH(tcpH);
 
         // 等待窗口滑动(忙等待)
-        while (window.isFull()) {
+        while (window.isCwndFull()) {
             Thread.onSpinWait();
         }
 
