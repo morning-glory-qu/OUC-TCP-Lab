@@ -1,7 +1,6 @@
 package com.ouc.tcp.test;
 
-import com.ouc.tcp.client.UDT_RetransTask;
-import com.ouc.tcp.client.UDT_Timer;
+import com.ouc.tcp.message.TCP_PACKET;
 
 
 enum SenderFlag {
@@ -17,6 +16,11 @@ public class SenderWindowElem extends WindowElem {
 
     public SenderWindowElem() {
         super();
+    }
+    public SenderWindowElem(TCP_PACKET tcpPacket, int flag) {
+        super();
+        this.tcpPacket = tcpPacket;
+        this.flag = flag;
     }
 
     /** 返回包是否被确认 */
