@@ -34,7 +34,6 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 
         // 将数据包交给窗口缓冲区处理，并获取处理结果
         int bufferResult = window.bufferPacket(recvPack);
-        System.out.println("bufferResult: " + bufferResult);
 
         // 延迟ACK策略：只在特定条件下发送ACK
         if (bufferResult == AckFlag.IS_BASE.ordinal()) {

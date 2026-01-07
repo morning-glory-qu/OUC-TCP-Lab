@@ -39,21 +39,33 @@ public class SenderSlidingWindow {
     }
 
     // 拥塞后重传
+//    private void sendWindow() {
+//        ssthresh = Math.max(cwnd / 2, 2);
+//        cwnd = 1;
+//        // 重传窗口左沿的包
+//        SenderWindowElem senderWindowElem = window.peekFirst(); // 取出窗口左沿的包
+//        if (senderWindowElem != null) {
+//            sender.udt_send(senderWindowElem.getTcpPacket());
+//        }
+//    }
+
     private void sendWindow() {
-        ssthresh = Math.max(cwnd / 2, 2);
-        cwnd = 1;
-        // 重传窗口左沿的包
-        SenderWindowElem senderWindowElem = window.peekFirst();
-        if (senderWindowElem != null) {
-            sender.udt_send(senderWindowElem.getTcpPacket());
+        for (SenderWindowElem elem : window) {
+            if (!elem.isAcked()) {
+                sender.udt_send(elem.getTcpPacket());
+            }
         }
     }
 
     public void resetTimer() {
-        timer.cancel();
-        timer = new UDT_Timer();
-        if (!window.isEmpty()) {
-            timer.schedule(new GBN_RetransTask(this), delay, period);
+        try {
+            timer.cancel();
+            timer = new UDT_Timer();
+            if (!window.isEmpty()) {
+                timer.schedule(new GBN_RetransTask(this), delay, period);
+            }
+        }  catch (Exception e) {
+            e.printStackTrace();
         }
     }
 
@@ -78,7 +90,7 @@ public class SenderSlidingWindow {
             timer = new UDT_Timer();
             timer.schedule(new GBN_RetransTask(this), delay, period); // 设置一个重传任务
         }
-        window.push(new SenderWindowElem(packet, SenderFlag.NOT_ACKED.ordinal()));
+        window.addLast(new SenderWindowElem(packet, SenderFlag.NOT_ACKED.ordinal()));
         sender.udt_send(packet);
     }
 
