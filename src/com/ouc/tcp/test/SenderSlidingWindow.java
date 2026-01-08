@@ -127,7 +127,7 @@ public class SenderSlidingWindow {
         // 快重传
         if (lastAckCount == 4) {
             ssthresh = cwnd / 2;
-            cwnd = 1;
+            cwnd = ssthresh;
             dCwnd = cwnd;
             resendPacket(ack);
         }
