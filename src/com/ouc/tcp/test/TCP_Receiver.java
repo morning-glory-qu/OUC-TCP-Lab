@@ -57,7 +57,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
                     reply(ackPack);
                 }
             }, 500); // 延迟500毫秒[1](@ref)
-        } else if (bufferResult != AckFlag.ORDERED.ordinal()) {
+        } else { // 只有窗口左沿的包不回ACK
             // 对于有序包或重复包，不立即回复ACK，等待延迟ACK机制处理
             // 这是延迟ACK策略的关键区别：不立即回复每个包[7](@ref)
             reply(ackPack);
