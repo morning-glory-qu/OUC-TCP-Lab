@@ -7,21 +7,20 @@ import com.ouc.tcp.client.TCP_Sender_ADT;
 import com.ouc.tcp.client.UDT_RetransTask;
 import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.*;
+import com.ouc.tcp.tool.TCP_TOOL;
 
 public class TCP_Sender extends TCP_Sender_ADT {
 
-    private TCP_PACKET tcpPack;	//待发送的TCP数据报
+    private TCP_PACKET tcpPack;    //待发送的TCP数据报
     private volatile int flag = 0;
-    private int curAck = 0;   // 0 or 1 for rdt2.1
-    private UDT_Timer timer = new UDT_Timer();
-    private UDT_RetransTask reTransTask;
-    private static final int TIMEOUT = 300; // ms
 
+    //计时器
+    UDT_Timer timer;
 
     /*构造函数*/
     public TCP_Sender() {
-        super();	//调用超类构造函数
-        super.initTCP_Sender(this);		//初始化TCP发送端
+        super();    //调用超类构造函数
+        super.initTCP_Sender(this);        //初始化TCP发送端
     }
 
     @Override
@@ -36,22 +35,26 @@ public class TCP_Sender extends TCP_Sender_ADT {
         tcpH.setTh_sum(CheckSum.computeChkSum(tcpPack));
         tcpPack.setTcpH(tcpH);
 
+        // 对每个数据包设置定时器
+        //重传任务
+        timer = new UDT_Timer();
+        UDT_RetransTask retransTask = new UDT_RetransTask(client, tcpPack);
+        timer.schedule(retransTask, 1000, 1000); // 1s后开始重传，每1s重传一次
+
         //发送TCP数据报
         udt_send(tcpPack);
         flag = 0;
 
-        reTransTask = new UDT_RetransTask(client,tcpPack);
-        timer.schedule(reTransTask, TIMEOUT);
         //等待ACK报文
         //waitACK();
-        while (flag==0);
+        while (flag == 0) Thread.onSpinWait();
     }
 
     @Override
     //不可靠发送：将打包好的TCP数据报通过不可靠传输信道发送；仅需修改错误标志
     public void udt_send(TCP_PACKET stcpPack) {
         //设置错误控制标志
-        tcpH.setTh_eflag((byte)4);  //eFlag = 0，信道无错误，发送方像接收方发送数据时不会产生位错
+        tcpH.setTh_eflag((byte) 7);
         //System.out.println("to send: "+stcpPack.getTcpH().getTh_seq());
         //发送数据报
         client.send(stcpPack);
@@ -62,29 +65,27 @@ public class TCP_Sender extends TCP_Sender_ADT {
     public void waitACK() {
         //循环检查ackQueue
         //循环检查确认号对列中是否有新收到的ACK
-        if(!ackQueue.isEmpty()){
-            int currentAck=ackQueue.poll();
+        if (!ackQueue.isEmpty()) {
+            int currentAck = ackQueue.poll();
             // System.out.println("CurrentAck: "+currentAck);
-            if (currentAck == tcpPack.getTcpH().getTh_seq()){
-                System.out.println("Clear: "+tcpPack.getTcpH().getTh_seq());
-                timer.cancel();
-                timer = new UDT_Timer();
+            // 接收到的ACK号等于当前发送的包号，说明发送成功
+            if (currentAck == tcpPack.getTcpH().getTh_seq()) {
+                timer.cancel(); // 取消定时器
+                System.out.println("Clear: " + tcpPack.getTcpH().getTh_seq());
                 flag = 1;
                 //break;
-            }else{
-//                System.out.println("Retransmit: "+tcpPack.getTcpH().getTh_seq());
-//                udt_send(tcpPack);
-                flag = 0;
             }
+            // 不等于，说明发送失败，由计时器触发重传
         }
     }
 
     @Override
     //接收到ACK报文：检查校验和，将确认号插入ack队列;NACK的确认号为－1；不需要修改
     public void recv(TCP_PACKET recvPack) {
-        System.out.println("Receive ACK Number： "+ recvPack.getTcpH().getTh_ack());
+        System.out.println("Receive ACK Number： " + recvPack.getTcpH().getTh_ack());
         ackQueue.add(recvPack.getTcpH().getTh_ack());
         System.out.println();
+
         //处理ACK报文
         waitACK();
 
