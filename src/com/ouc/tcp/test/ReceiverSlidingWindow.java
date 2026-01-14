@@ -54,6 +54,9 @@ public class ReceiverSlidingWindow {
 
     // 处理接收到的数据包，更新窗口状态
     //处理接收到的数据包，将其缓存在窗口的相应位置，并返回该包的状态，允许缓存乱序包
+
+
+    //处理接收到的数据包，将其缓存在窗口的相应位置，并返回该包的状态，允许缓存乱序包
     public int bufferPacket(TCP_PACKET packet) {
         // 1. 计算当前收到的包的逻辑序列号
         int packetDataLength = packet.getTcpS().getData().length;
